@@ -1,8 +1,9 @@
+import os
 import argparse, hashlib, json, random, time, uuid
 from datetime import datetime, timezone
 import requests
 
-URL = "http://localhost:8000/ingest"
+URL = os.getenv("SAAS_INGEST_URL", "http://localhost:8000/ingest")
 # key -> (tenant, country in topology.json, region, token, collector)
 FLEETS = {
     "acme": ("tenant_acme", "India", "ap-south-1", "token-acme-sim-ap-south", "col-acme-sim"),

@@ -1,8 +1,9 @@
+import os
 import argparse, json, random, time, uuid
 from datetime import datetime, timezone
 import requests
 
-URL = "http://localhost:8000/ingest"
+URL = os.getenv("SAAS_INGEST_URL", "http://localhost:8000/ingest")
 TOKEN = "token-global-us-east"
 TENANT = "tenant_global"
 REGION = "us-east-1"
