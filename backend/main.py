@@ -17,6 +17,8 @@ from backend.db import (
     verify_token_from_db,
 )
 
+ALLOWED_FIELDS = {"payload_id", "tenant_id", "region", "collector_id", "source_hash", "category", "metric", "value", "ts_utc", "source_tz", "severity", "context_code"}
+
 app = FastAPI(title="Tier 2 Central Multi-Tenant AIOps SaaS")
 
 app.add_middleware(
@@ -54,6 +56,13 @@ def ingest_telemetry(
 ):
     tenant_id, allowed_region = authenticate(authorization)
     items = body if isinstance(body, list) else [body]
+
+    for _it in items:
+        if not isinstance(_it, dict):
+            raise HTTPException(status_code=422, detail="Payload rejected: each item must be a JSON object")
+        _bad = set(_it.keys()) ^ ALLOWED_FIELDS
+        if _bad:
+            raise HTTPException(status_code=422, detail="Payload rejected by SaaS allow-list; offending fields: " + ", ".join(sorted(_bad)))
 
     accepted = 0
     duplicates = 0

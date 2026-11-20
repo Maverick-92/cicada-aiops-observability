@@ -9,7 +9,7 @@ REGION = "us-east-1"
 COLLECTOR = "col-global-sim"
 SPEC = [
     ("cpu_pct", "infrastructure", 2.0, 1, 99),
-    ("memory_pct", "infrastructure", 1.2, 1, 99),
+    ("mem_pct", "infrastructure", 1.2, 1, 99),
     ("disk_pct", "infrastructure", 0.2, 1, 99),
     ("bandwidth_mbps", "network", 15.0, 0, 1000),
     ("latency_ms", "network", 3.0, 1, 2000),
@@ -36,7 +36,7 @@ def main():
         if t["site_id"] in site_ids:
             by_site.setdefault(t["site_id"], []).append(t)
         rr = random.Random(t["source_hash"])
-        base[t["source_hash"]] = {"cpu_pct": rr.uniform(18, 42), "memory_pct": rr.uniform(40, 70), "disk_pct": rr.uniform(30, 75), "bandwidth_mbps": rr.uniform(60, 400), "latency_ms": rr.uniform(25, 90), "packet_loss_pct": 0.1}
+        base[t["source_hash"]] = {"cpu_pct": rr.uniform(18, 42), "mem_pct": rr.uniform(40, 70), "disk_pct": rr.uniform(30, 75), "bandwidth_mbps": rr.uniform(60, 400), "latency_ms": rr.uniform(25, 90), "packet_loss_pct": 0.1}
     sess = requests.Session()
     sess.headers.update({"Authorization": "Bearer " + TOKEN})
     print("sites:", len(site_ids), "servers:", sum(len(v) for v in by_site.values()), "interval:", a.interval, "s")
@@ -59,7 +59,7 @@ def main():
                     if a.spike and sid == a.spike and t["server_no"] == 1 and metric in ("cpu_pct", "latency_ms"):
                         v = random.uniform(94, 97) if metric == "cpu_pct" else random.uniform(400, 430)
                         sev = "high"
-                        ctx = "THRESHOLD_BREACH"
+                        ctx = "CPU_SPIKE" if metric == "cpu_pct" else "LATENCY_DEGRADED"
                     v = min(max(v, lo), hi)
                     batch.append({"payload_id": str(uuid.uuid4()), "tenant_id": TENANT, "region": REGION, "collector_id": COLLECTOR, "source_hash": h, "category": cat, "metric": metric, "value": round(v, 2), "ts_utc": ts, "source_tz": t["source_tz"], "severity": sev, "context_code": ctx})
             try:
