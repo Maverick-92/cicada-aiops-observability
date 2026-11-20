@@ -37,6 +37,18 @@ class ApproveRequest(BaseModel):
 @app.on_event("startup")
 def startup():
     init_saas_db()
+    try:
+        _c = sqlite3.connect(SAAS_DB)
+        _has = _c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sites'").fetchone()
+        _cnt = _c.execute("SELECT COUNT(*) FROM sites").fetchone()[0] if _has else 0
+        _c.close()
+        if _cnt == 0:
+            from backend.seed_global import main as _seed_global
+            from backend.seed_tenants import main as _seed_tenants
+            _seed_global()
+            _seed_tenants()
+    except Exception as _e:
+        print(f'[startup] auto-seed skipped: {_e}')
 
 
 def authenticate(authorization: str | None) -> tuple[str, str]:
