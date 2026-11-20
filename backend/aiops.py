@@ -75,15 +75,17 @@ def evaluate_and_correlate(event: dict):
             "ts_utc": event_ts,
         }
 
-        # Check for an existing OPEN incident on the same source_hash within 60 seconds
+        grp = 'security' if metric == 'failed_logins_1m' else ('network' if metric == 'packet_loss_pct' else 'resource')
+        inc_title = f'Correlated Anomaly on {source_hash} [{grp}]'
+        # Check for an existing OPEN incident on the same source_hash and signal group within 60 seconds
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
         existing = conn.execute(
             """
             SELECT * FROM incidents
-            WHERE tenant_id = ? AND source_hash = ? AND status = 'OPEN' AND updated_at_utc >= ?
+            WHERE tenant_id = ? AND source_hash = ? AND status = 'OPEN' AND title = ? AND updated_at_utc >= ?
             ORDER BY updated_at_utc DESC LIMIT 1
             """,
-            (tenant_id, source_hash, cutoff),
+            (tenant_id, source_hash, inc_title, cutoff),
         ).fetchone()
 
         now_utc = datetime.now(timezone.utc).isoformat()
@@ -133,7 +135,7 @@ def evaluate_and_correlate(event: dict):
                     tenant_id,
                     source_hash,
                     sev,
-                    f"Correlated Anomaly on {source_hash}",
+                    inc_title,
                     cause,
                     action,
                     rollback,

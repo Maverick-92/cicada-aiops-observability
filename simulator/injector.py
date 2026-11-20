@@ -539,6 +539,7 @@ class Verifier:
     def test_6(self, result: Result) -> None:
         probe = metadata(ACME, "collector_heartbeat", 1.0,
                          category="fleet", context="HEARTBEAT_OK")
+        probe["source_hash"] = "srv_ceebef596acd"
         status, _ = self.client.ingest(probe, token="invalid-demo-token",
                                       expected=(200, 201, 400, 401, 403, 422))
         result.check(status in (401, 403), "Invalid token rejected with HTTP 401 or 403",
