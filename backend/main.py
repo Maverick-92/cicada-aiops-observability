@@ -133,6 +133,10 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         total_events = conn.execute(
             "SELECT COUNT(*) FROM telemetry_events WHERE tenant_id = ?", (tenant_id,)
         ).fetchone()[0]
+        slo_rows = conn.execute(
+            "SELECT ts_utc, ingested_at_utc FROM telemetry_events WHERE tenant_id = ? AND metric != 'collector_heartbeat' ORDER BY id DESC LIMIT 300",
+            (tenant_id,),
+        ).fetchall()
         conn.close()
 
     # Compute 4-state health evaluation (Excellent, Good, Fair, Poor)
@@ -186,10 +190,33 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         raw_alerts_total += d["raw_alert_count"]
         parsed_incidents.append(d)
 
+    lags = []
+    late_excluded = 0
+    for sr in slo_rows:
+        try:
+            t_evt = datetime.fromisoformat(str(sr[0]).replace("Z", "+00:00"))
+            t_ing = datetime.fromisoformat(str(sr[1]).replace("Z", "+00:00"))
+            if t_evt.tzinfo is None:
+                t_evt = t_evt.replace(tzinfo=now.tzinfo)
+            if t_ing.tzinfo is None:
+                t_ing = t_ing.replace(tzinfo=now.tzinfo)
+            lag = max((t_ing - t_evt).total_seconds(), 0.0)
+        except Exception:
+            continue
+        if lag > 60.0:
+            late_excluded += 1
+        else:
+            lags.append(lag)
+    lags.sort()
+    def _pct(p):
+        return round(lags[max(0, -(-p * len(lags) // 100) - 1)] * 1000) if lags else None
+    slo = {"p50_ms": _pct(50), "p95_ms": _pct(95), "samples": len(lags), "late_excluded": late_excluded, "target_p95_ms": 10000}
+    
     return {
         "tenant_id": tenant_id,
         "region": region,
         "total_events_stored": total_events,
+        "slo": slo,
         "health": {
             "state": overall_state,
             "reason": state_reason,

@@ -115,6 +115,12 @@ def init_saas_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_tenant_metric_ts ON telemetry_events(tenant_id, metric, ts_utc DESC)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_tenant_source_metric_ts ON telemetry_events(tenant_id, source_hash, metric, ts_utc DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_tenant_ts ON telemetry_events(tenant_id, ts_utc DESC)"
+        )
 
         # 5. AUDITABLE HEALTH STATE TRANSITIONS (UTC TIMESTAMPED)
         conn.execute(
