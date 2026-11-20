@@ -14,7 +14,7 @@ from typing import Literal, Optional
 import requests
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-SAAS_INGEST_URL = os.getenv("SAAS_INGEST_URL", "http://localhost:8000/ingest")
+SAAS_INGEST_URL = os.getenv("SAAS_INGEST_URL", "https://localhost:8000/ingest")
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "token-acme-ap-south")
 TENANT_ID = "tenant_acme"
 REGION = "ap-south-1"
@@ -236,8 +236,7 @@ def drain_queue_worker():
                 SAAS_INGEST_URL,
                 json=batch,
                 headers={"Authorization": f"Bearer {COLLECTOR_TOKEN}"},
-                timeout=3.0,
-            )
+                timeout=3.0, verify=os.path.join(os.path.dirname(__file__), "..", "certs", "saas.crt"))
             if resp.status_code in (200, 201):
                 with db_lock:
                     b_conn = sqlite3.connect(BUFFER_DB)
@@ -311,3 +310,4 @@ def telemetry_loop():
                 }
             )
         time.sleep(2.0)
+
