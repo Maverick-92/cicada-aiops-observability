@@ -173,6 +173,13 @@ def get_dashboard(authorization: str | None = Header(default=None)):
             }
         )
 
+    online_cols = sorted([c for c in collectors if c["status"] == "ONLINE"], key=lambda x: x["seconds_ago"])
+    stale_cols = sorted([c for c in collectors if c["status"] != "ONLINE"], key=lambda x: x["seconds_ago"])
+    stale_count = len(stale_cols)
+    online_count = len(online_cols)
+    total_collectors = len(collectors)
+    collectors = (online_cols[:15] + stale_cols[:10]) if (online_cols and stale_cols) else (online_cols + stale_cols)[:25]
+
     import sqlite3 as _sq
     from backend.extras import load_thresholds
     with saas_lock:
@@ -180,19 +187,36 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         _th = load_thresholds(_tc, tenant_id)
         _tc.close()
     cpu_fair, cpu_poor = _th["cpu_pct"]
-    lat_fair = _th["latency_ms"][0]
-    if any_stale or latest_cpu >= cpu_poor or any(i["severity"] == "critical" for i in open_incidents):
+    lat_fair, lat_poor = _th["latency_ms"]
+    crit_incidents = [i for i in open_incidents if i["severity"] == "critical"]
+    if any_stale or latest_cpu >= cpu_poor or latest_lat >= lat_poor or crit_incidents:
         overall_state = "Poor"
-        state_reason = "Collector stale (>60s) or critical threshold/anomaly active" if any_stale else f"Critical anomaly / CPU at {latest_cpu}% (poor limit {cpu_poor})"
-    elif latest_cpu >= cpu_fair or latest_lat >= lat_fair or len(open_incidents) > 0:
+        reasons = []
+        if any_stale:
+            reasons.append(f"{stale_count} of {total_collectors} collector(s) stale (>60s)")
+        if latest_cpu >= cpu_poor:
+            reasons.append(f"CPU {latest_cpu}% >= poor limit {cpu_poor}%")
+        if latest_lat >= lat_poor:
+            reasons.append(f"latency {latest_lat} ms >= poor limit {lat_poor} ms")
+        if crit_incidents:
+            reasons.append(f"{len(crit_incidents)} open critical incident(s) ({crit_incidents[0]['incident_id']})")
+        state_reason = "; ".join(reasons)
+    elif latest_cpu >= cpu_fair or latest_lat >= lat_fair or open_incidents:
         overall_state = "Fair"
-        state_reason = f"Elevated load (CPU {latest_cpu}% vs fair limit {cpu_fair}, latency {latest_lat} ms vs fair limit {lat_fair}) or open incident"
+        reasons = []
+        if latest_cpu >= cpu_fair:
+            reasons.append(f"CPU {latest_cpu}% >= fair limit {cpu_fair}%")
+        if latest_lat >= lat_fair:
+            reasons.append(f"latency {latest_lat} ms >= fair limit {lat_fair} ms")
+        if open_incidents:
+            reasons.append(f"{len(open_incidents)} open incident(s) ({open_incidents[0]['incident_id']})")
+        state_reason = "; ".join(reasons)
     elif latest_cpu >= 0.7 * cpu_fair:
         overall_state = "Good"
-        state_reason = f"Minor workload deviation (CPU {latest_cpu}%), no service impact"
+        state_reason = f"CPU {latest_cpu}% in upper normal band (fair limit {cpu_fair}%)"
     else:
         overall_state = "Excellent"
-        state_reason = "All collectors reporting on time; metrics within configured thresholds"
+        state_reason = f"All {online_count} collector(s) reporting on time; metrics within configured thresholds"
 
     record_health_transition(tenant_id, overall_state, state_reason)
 
