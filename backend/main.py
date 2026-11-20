@@ -251,3 +251,34 @@ def approve_remediation(
         conn.close()
 
     return {"status": "approved_and_logged", "incident_id": incident_id}
+
+class ReconcileRequest(BaseModel):
+    payload_ids: List[str]
+
+
+@app.post("/api/reconcile")
+def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=None)):
+    """Tenant-scoped delivery proof: how many of these payload_ids does SaaS hold?"""
+    tenant_id, _ = authenticate(authorization)
+    ids = list(dict.fromkeys(req.payload_ids))[:20000]
+    found = 0
+    rows_total = 0
+    with saas_lock:
+        conn = sqlite3.connect(SAAS_DB)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            r = conn.execute(
+                f"SELECT COUNT(*), COUNT(DISTINCT payload_id) FROM telemetry_events "
+                f"WHERE tenant_id = ? AND payload_id IN ({marks})",
+                [tenant_id, *chunk],
+            ).fetchone()
+            rows_total += r[0]
+            found += r[1]
+        conn.close()
+    return {
+        "sent": len(ids),
+        "received": found,
+        "missing": len(ids) - found,
+        "duplicate_rows": rows_total - found,
+    }
