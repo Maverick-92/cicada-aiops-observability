@@ -173,18 +173,26 @@ def get_dashboard(authorization: str | None = Header(default=None)):
             }
         )
 
-    if any_stale or latest_cpu >= 90 or any(i["severity"] == "critical" for i in open_incidents):
+    import sqlite3 as _sq
+    from backend.extras import load_thresholds
+    with saas_lock:
+        _tc = _sq.connect(SAAS_DB)
+        _th = load_thresholds(_tc, tenant_id)
+        _tc.close()
+    cpu_fair, cpu_poor = _th["cpu_pct"]
+    lat_fair = _th["latency_ms"][0]
+    if any_stale or latest_cpu >= cpu_poor or any(i["severity"] == "critical" for i in open_incidents):
         overall_state = "Poor"
-        state_reason = "Collector stale (>60s) or critical threshold/anomaly active" if any_stale else f"Critical anomaly / CPU at {latest_cpu}%"
-    elif latest_cpu >= 70 or latest_lat >= 250 or len(open_incidents) > 0:
+        state_reason = "Collector stale (>60s) or critical threshold/anomaly active" if any_stale else f"Critical anomaly / CPU at {latest_cpu}% (poor limit {cpu_poor})"
+    elif latest_cpu >= cpu_fair or latest_lat >= lat_fair or len(open_incidents) > 0:
         overall_state = "Fair"
-        state_reason = f"Elevated load (CPU {latest_cpu}%, Latency {latest_lat}ms) or open incident"
-    elif latest_cpu >= 50:
+        state_reason = f"Elevated load (CPU {latest_cpu}% vs fair limit {cpu_fair}, latency {latest_lat} ms vs fair limit {lat_fair}) or open incident"
+    elif latest_cpu >= 0.7 * cpu_fair:
         overall_state = "Good"
         state_reason = f"Minor workload deviation (CPU {latest_cpu}%), no service impact"
     else:
         overall_state = "Excellent"
-        state_reason = "All collectors reporting on time; metrics within normal Z-score baselines"
+        state_reason = "All collectors reporting on time; metrics within configured thresholds"
 
     record_health_transition(tenant_id, overall_state, state_reason)
 
