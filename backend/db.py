@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 import os
 import sqlite3
@@ -224,7 +224,7 @@ def verify_token_from_db(raw_token: str) -> Optional[tuple[str, str]]:
         conn.close()
     if row:
         return (row["tenant_id"], row["allowed_region"])
-    return API_TOKENS.get(raw_token)
+    return None
 
 
 def insert_payload_idempotent(payload: dict) -> bool:

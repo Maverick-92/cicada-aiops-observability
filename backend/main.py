@@ -1,4 +1,4 @@
-﻿import json
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import List, Union
@@ -9,11 +9,12 @@ from pydantic import BaseModel
 
 from backend.aiops import evaluate_and_correlate
 from backend.db import (
-    API_TOKENS,
     SAAS_DB,
     init_saas_db,
     insert_payload_idempotent,
+    record_health_transition,
     saas_lock,
+    verify_token_from_db,
 )
 
 app = FastAPI(title="Tier 2 Central Multi-Tenant AIOps SaaS")
@@ -40,9 +41,10 @@ def authenticate(authorization: str | None) -> tuple[str, str]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Bearer token")
     token = authorization.split(" ", 1)[1].strip()
-    if token not in API_TOKENS:
-        raise HTTPException(status_code=403, detail="Invalid collector/tenant token")
-    return API_TOKENS[token]
+    ctx = verify_token_from_db(token)
+    if ctx is None:
+        raise HTTPException(status_code=401, detail="Invalid or revoked token")
+    return ctx
 
 
 @app.post("/ingest")
@@ -123,6 +125,11 @@ def get_dashboard(authorization: str | None = Header(default=None)):
             (tenant_id,),
         ).fetchall()
 
+        transitions_rows = conn.execute(
+            "SELECT previous_state, new_state, reason, ts_utc FROM health_transitions WHERE tenant_id = ? ORDER BY id DESC LIMIT 10",
+            (tenant_id,),
+        ).fetchall()
+
         total_events = conn.execute(
             "SELECT COUNT(*) FROM telemetry_events WHERE tenant_id = ?", (tenant_id,)
         ).fetchone()[0]
@@ -166,6 +173,8 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         overall_state = "Excellent"
         state_reason = "All collectors reporting on time; metrics within normal Z-score baselines"
 
+    record_health_transition(tenant_id, overall_state, state_reason)
+
     # Reverse metrics_rows so charts render left-to-right chronologically by event time
     chronological_metrics = [dict(r) for r in reversed(metrics_rows)]
 
@@ -195,6 +204,7 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         "metrics": chronological_metrics,
         "incidents": parsed_incidents,
         "audit_logs": [dict(a) for a in audit_rows],
+        "health_history": [dict(r) for r in transitions_rows],
     }
 
 
