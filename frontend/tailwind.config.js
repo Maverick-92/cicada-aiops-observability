@@ -1,1 +1,5 @@
-export default {content:['./index.html','./src/**/*.{js,jsx}'],theme:{extend:{colors:{bg:'#F8FAFC',ink:'#0F172A',mute:'#64748B',brand:'#2563EB',ok:'#16A34A',warn:'#F59E0B',crit:'#DC2626',line:'#E2E8F0'},fontFamily:{sans:['Inter','ui-sans-serif','system-ui','sans-serif']}}},plugins:[]}
+export default {
+  content: ["./index.html", "./src/**/*.{js,jsx}"],
+  theme: { extend: {} },
+  plugins: [],
+};
