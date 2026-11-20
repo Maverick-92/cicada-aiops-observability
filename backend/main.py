@@ -365,3 +365,7 @@ def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=
 
 from backend.extras import register
 register(app, authenticate)
+
+@app.get("/")
+def root_health():
+    return {"status": "ok", "service": "Tier 2 Zero-Trust AIOps SaaS", "docs": "/docs"}

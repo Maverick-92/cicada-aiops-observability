@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import { Activity, CheckCircle2, ExternalLink, Server, ShieldCheck, TriangleAlert } from "lucide-react";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 const COLLECTOR_URL = "http://localhost:8001";
 
 // DEMO ONLY: in production, tokens never live in browser code.
