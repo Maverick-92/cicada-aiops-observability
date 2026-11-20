@@ -236,7 +236,7 @@ def drain_queue_worker():
                 SAAS_INGEST_URL,
                 json=batch,
                 headers={"Authorization": f"Bearer {COLLECTOR_TOKEN}"},
-                timeout=3.0, verify=True, "..", "certs", "saas.crt"))
+                timeout=10.0, verify=True)
             if resp.status_code in (200, 201):
                 with db_lock:
                     b_conn = sqlite3.connect(BUFFER_DB)
