@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import FleetPanel from "./FleetPanel.jsx";
 import {
   CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
@@ -10,6 +11,7 @@ const COLLECTOR_URL = "http://localhost:8001";
 // DEMO ONLY: in production, tokens never live in browser code.
 const TENANTS = [
   { id: "tenant_acme", name: "Acme India", region: "ap-south-1", token: "token-acme-ap-south" },
+  { id: "tenant_global", name: "Acme Global (600 servers)", region: "us-east-1", token: "token-global-us-east" },
   { id: "tenant_globex", name: "Globex EU", region: "eu-central-1", token: "token-globex-eu-central" },
   { id: "tenant_initech", name: "Initech US", region: "us-east-1", token: "token-initech-us-east" },
 ];
@@ -154,6 +156,7 @@ export default function App() {
             </Card>
           </div>
 
+          <FleetPanel api={API} token={tenant.token} />
           <Card title="Metrics (event-time order)">
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">

@@ -318,3 +318,6 @@ def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=
         "missing": len(ids) - found,
         "duplicate_rows": rows_total - found,
     }
+
+from backend.extras import register
+register(app, authenticate)
