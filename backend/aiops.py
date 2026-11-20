@@ -1,4 +1,4 @@
-﻿import json
+import json
 import math
 import sqlite3
 import uuid
@@ -36,20 +36,20 @@ def evaluate_and_correlate(event: dict):
             (tenant_id, source_hash, metric),
         ).fetchall()
 
-        if len(rows) < 5:
-            conn.close()
-            return
-
         # Baseline excludes the newest point
         history = [float(r["value"]) for r in rows[1:]]
-        mean = sum(history) / len(history)
-        variance = sum((x - mean) ** 2 for x in history) / len(history)
-        std_dev = max(math.sqrt(variance), 1.5)  # floor prevents divide-by-zero on flat metrics
-        z_score = (val - mean) / std_dev
+        has_baseline = len(history) >= 4
+        if has_baseline:
+            mean = sum(history) / len(history)
+            variance = sum((x - mean) ** 2 for x in history) / len(history)
+            std_dev = max(math.sqrt(variance), 1.5)  # floor prevents divide-by-zero on flat metrics
+            z_score = (val - mean) / std_dev
+        else:
+            mean, std_dev, z_score = 0.0, 1.5, 0.0  # no history: hard limits only
 
         # Hard operational guardrails + dynamic Z-score > 2.8
         is_anomalous = (
-            abs(z_score) >= 2.8
+            (has_baseline and abs(z_score) >= 2.8)
             or (metric == "cpu_pct" and val >= 88.0)
             or (metric == "latency_ms" and val >= 250.0)
             or (metric == "packet_loss_pct" and val >= 5.0)
@@ -61,7 +61,7 @@ def evaluate_and_correlate(event: dict):
             return
 
         # Hysteresis check: require either high severity burst or 2 consecutive elevated samples
-        prev_val = float(rows[1]["value"])
+        prev_val = float(rows[1]["value"]) if len(rows) > 1 else val
         prev_z = (prev_val - mean) / std_dev
         if metric not in ("failed_logins_1m", "packet_loss_pct") and abs(z_score) < 4.5 and abs(prev_z) < 2.0:
             conn.close()

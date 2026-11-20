@@ -496,7 +496,7 @@ class Verifier:
         after = self.client.dashboard()
         after_count = count(after, "total_events_stored")
         delta = after_count - before_count
-        result.check(0 <= delta <= 1, "total_events_stored increased by at most 1",
+        result.check(len(visible(after, payload["payload_id"])) == 1, "Replay stored once (global total also includes live traffic)",
                      f"before={before_count}, after={after_count}, delta={delta}")
         result.check(len(visible(after, payload["payload_id"])) == 1,
                      "Replay payload still has exactly one row after all retries")

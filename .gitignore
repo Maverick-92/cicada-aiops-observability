@@ -33,3 +33,5 @@ Thumbs.db
 .idea/
 
 certs/*.key
+
+certs/*.key

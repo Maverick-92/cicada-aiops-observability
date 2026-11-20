@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import hmac
 import json
 import os
@@ -14,7 +14,7 @@ from typing import Literal, Optional
 import requests
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-SAAS_INGEST_URL = os.getenv("SAAS_INGEST_URL", "https://localhost:8000/ingest")
+SAAS_INGEST_URL = os.getenv("SAAS_INGEST_URL", "http://localhost:8000/ingest")
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "token-acme-ap-south")
 TENANT_ID = "tenant_acme"
 REGION = "ap-south-1"
