@@ -16,13 +16,20 @@ from backend.db import (
     saas_lock,
     verify_token_from_db,
 )
-from backend.extras import load_thresholds, register
 
 ALLOWED_FIELD_ORDER = [
     "payload_id", "tenant_id", "region", "collector_id", "source_hash",
     "category", "metric", "value", "ts_utc", "source_tz", "severity", "context_code",
 ]
 ALLOWED_FIELDS = set(ALLOWED_FIELD_ORDER)
+METRIC_LABELS = {
+    "cpu_pct": ("CPU", "%"),
+    "mem_pct": ("Memory", "%"),
+    "disk_pct": ("Disk", "%"),
+    "bandwidth_mbps": ("Bandwidth", " Mbps"),
+    "latency_ms": ("Latency", " ms"),
+    "packet_loss_pct": ("Packet loss", "%"),
+}
 DUPLICATES_BLOCKED: dict[str, int] = {}
 
 app = FastAPI(title="Tier 2 Central Multi-Tenant AIOps SaaS")
@@ -112,6 +119,8 @@ def ingest_telemetry(
 
 @app.get("/api/dashboard")
 def get_dashboard(authorization: str | None = Header(default=None)):
+    from backend.extras import load_thresholds
+
     tenant_id, region = authenticate(authorization)
     now = datetime.now(timezone.utc)
 
@@ -123,7 +132,18 @@ def get_dashboard(authorization: str | None = Header(default=None)):
             """
             SELECT * FROM telemetry_events
             WHERE tenant_id = ?
-            ORDER BY ts_utc DESC LIMIT 240
+            ORDER BY ts_utc DESC LIMIT 600
+            """,
+            (tenant_id,),
+        ).fetchall()
+
+        latest_metric_rows = conn.execute(
+            """
+            SELECT source_hash, metric, value, MAX(ts_utc) AS last_ts
+            FROM telemetry_events
+            WHERE tenant_id = ?
+              AND metric IN ('cpu_pct','mem_pct','disk_pct','bandwidth_mbps','latency_ms','packet_loss_pct')
+            GROUP BY source_hash, metric
             """,
             (tenant_id,),
         ).fetchall()
@@ -174,10 +194,18 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         dup_count = DUPLICATES_BLOCKED.get(tenant_id, 0)
         conn.close()
 
-    latest_cpu = next((r["value"] for r in metrics_rows if r["metric"] == "cpu_pct"), 25.0)
-    latest_mem = next((r["value"] for r in metrics_rows if r["metric"] == "mem_pct"), None)
-    latest_disk = next((r["value"] for r in metrics_rows if r["metric"] == "disk_pct"), None)
-    latest_lat = next((r["value"] for r in metrics_rows if r["metric"] == "latency_ms"), 30.0)
+    # Fleet averages across all reporting servers (latest sample per server per metric)
+    metric_vals: dict[str, list[float]] = {}
+    active_servers = set()
+    for r in latest_metric_rows:
+        active_servers.add(r["source_hash"])
+        metric_vals.setdefault(r["metric"], []).append(float(r["value"]))
+    fleet_avg = {m: round(sum(vs) / len(vs), 2) for m, vs in metric_vals.items() if vs}
+
+    avg_cpu = fleet_avg.get("cpu_pct", 0.0)
+    avg_mem = fleet_avg.get("mem_pct")
+    avg_disk = fleet_avg.get("disk_pct")
+    avg_lat = fleet_avg.get("latency_ms", 0.0)
     open_incidents = [dict(r) for r in incidents_rows if r["status"] == "OPEN"]
 
     collectors = []
@@ -205,37 +233,41 @@ def get_dashboard(authorization: str | None = Header(default=None)):
     total_collectors = len(collectors)
     collectors = (online_cols[:15] + stale_cols[:10]) if (online_cols and stale_cols) else (online_cols + stale_cols)[:25]
 
-    cpu_fair, cpu_poor = _th["cpu_pct"]
-    lat_fair, lat_poor = _th["latency_ms"]
+    # 4-State health evaluated from fleet averages across all 6 metrics + stale collectors + open incidents
+    poor_breaches, fair_breaches, good_bands = [], [], []
+    for m, (label, unit) in METRIC_LABELS.items():
+        if m in fleet_avg and m in _th:
+            v = fleet_avg[m]
+            fair, poor = _th[m]
+            if v >= poor:
+                poor_breaches.append(f"fleet avg {label} {v}{unit} >= poor {poor}{unit}")
+            elif v >= fair:
+                fair_breaches.append(f"fleet avg {label} {v}{unit} >= fair {fair}{unit}")
+            elif v >= 0.7 * fair:
+                good_bands.append(f"fleet avg {label} {v}{unit} in upper normal band (fair {fair}{unit})")
+
     crit_incidents = [i for i in open_incidents if i["severity"] == "critical"]
-    if any_stale or latest_cpu >= cpu_poor or latest_lat >= lat_poor or crit_incidents:
+    if any_stale or poor_breaches or crit_incidents:
         overall_state = "Poor"
         reasons = []
         if any_stale:
             reasons.append(f"{stale_count} of {total_collectors} collector(s) stale (>60s)")
-        if latest_cpu >= cpu_poor:
-            reasons.append(f"CPU {latest_cpu}% >= poor limit {cpu_poor}%")
-        if latest_lat >= lat_poor:
-            reasons.append(f"latency {latest_lat} ms >= poor limit {lat_poor} ms")
+        reasons.extend(poor_breaches)
         if crit_incidents:
             reasons.append(f"{len(crit_incidents)} open critical incident(s) ({crit_incidents[0]['incident_id']})")
         state_reason = "; ".join(reasons)
-    elif latest_cpu >= cpu_fair or latest_lat >= lat_fair or open_incidents:
+    elif fair_breaches or open_incidents:
         overall_state = "Fair"
-        reasons = []
-        if latest_cpu >= cpu_fair:
-            reasons.append(f"CPU {latest_cpu}% >= fair limit {cpu_fair}%")
-        if latest_lat >= lat_fair:
-            reasons.append(f"latency {latest_lat} ms >= fair limit {lat_fair} ms")
+        reasons = list(fair_breaches)
         if open_incidents:
             reasons.append(f"{len(open_incidents)} open incident(s) ({open_incidents[0]['incident_id']})")
         state_reason = "; ".join(reasons)
-    elif latest_cpu >= 0.7 * cpu_fair:
+    elif good_bands:
         overall_state = "Good"
-        state_reason = f"CPU {latest_cpu}% in upper normal band (fair limit {cpu_fair}%)"
+        state_reason = "; ".join(good_bands)
     else:
         overall_state = "Excellent"
-        state_reason = f"All {online_count} collector(s) reporting on time; metrics within configured thresholds"
+        state_reason = f"All {online_count} collector(s) online; fleet averages across {len(active_servers)} server(s) well within thresholds"
 
     record_health_transition(tenant_id, overall_state, state_reason)
 
@@ -295,10 +327,11 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         "health": {
             "state": overall_state,
             "reason": state_reason,
-            "latest_cpu": latest_cpu,
-            "latest_mem": latest_mem,
-            "latest_disk": latest_disk,
-            "latest_latency": latest_lat,
+            "latest_cpu": avg_cpu,
+            "latest_mem": avg_mem,
+            "latest_disk": avg_disk,
+            "latest_latency": avg_lat,
+            "servers_averaged": len(active_servers),
             "online_collectors": online_count,
             "stale_collectors": stale_count,
             "total_collectors": total_collectors,
@@ -392,6 +425,7 @@ def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=
     }
 
 
+from backend.extras import register
 register(app, authenticate)
 
 

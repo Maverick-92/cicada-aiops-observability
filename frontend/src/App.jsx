@@ -6,7 +6,7 @@ import {
 import { Activity, CheckCircle2, ExternalLink, Server, ShieldCheck, TriangleAlert } from "lucide-react";
 
 const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/+$/, "");
-const COLLECTOR_URL = "http://localhost:8001";
+const COLLECTOR_URL = "http://127.0.0.1:8001/";
 
 // DEMO ONLY: in production, tokens never live in browser code.
 const TENANTS = [
@@ -93,7 +93,7 @@ export default function App() {
     }
   };
 
-  // Group chronologically by UTC second so all 6 metrics plot cleanly on both single-host and fleet tenants
+  // Group chronologically by UTC second so all 6 metrics plot cleanly
   const chart = useMemo(() => {
     if (!data?.metrics) return [];
     const buckets = new Map();
@@ -148,7 +148,7 @@ export default function App() {
             rel="noreferrer"
             className="flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
           >
-            Tier 1 Egress Proof (:8001) <ExternalLink size={14} />
+            Tier 1 Egress Proof (127.0.0.1:8001) <ExternalLink size={14} />
           </a>
         </div>
       </header>
@@ -214,7 +214,7 @@ export default function App() {
               </div>
               <p className="mt-2 text-xs text-slate-400">{health.reason}</p>
             </Card>
-            <Card title="Latest System & Latency">
+            <Card title="Fleet Average (All Servers)">
               <p className="text-xl font-bold">
                 {health.latest_cpu}% <span className="text-xs font-normal text-slate-400">CPU</span>{" "}
                 <span className="text-slate-600">/</span>{" "}
@@ -222,6 +222,7 @@ export default function App() {
               </p>
               <p className="mt-1 text-xs text-slate-400">
                 Disk {health.latest_disk ?? "-"}% {"\u00b7"} Latency {health.latest_latency} ms
+                {health.servers_averaged ? ` \u00b7 avg of ${health.servers_averaged} servers` : ""}
               </p>
             </Card>
             <Card title="AIOps Noise Reduction">
@@ -292,7 +293,7 @@ export default function App() {
           >
             {data.incidents.length === 0 && (
               <p className="text-sm text-slate-400">
-                No active incidents. Trigger a live scenario from Tier 1 (:8001) or simulator --spike to demonstrate detection & remediation.
+                No active incidents. Trigger a live scenario from Tier 1 (127.0.0.1:8001) or simulator --spike to demonstrate detection & remediation.
               </p>
             )}
             <div className="space-y-3">
@@ -362,7 +363,18 @@ export default function App() {
                     <li><b>Pseudonymous host ID:</b> <span className="font-mono text-slate-200">{data.latest_payload.source_hash}</span> (HMAC-SHA256 hashed inside Tier 1).</li>
                     <li><b>Strict schema gate:</b> Both Tier 1 and Tier 2 reject any extra or missing key with <span className="font-mono text-amber-300">HTTP 422</span>.</li>
                     <li><b>Regional isolation:</b> Token pinned to <span className="font-mono text-slate-200">{data.region}</span> (<span className="font-mono text-amber-300">HTTP 403</span> on cross-region/tenant attempts).</li>
-                    <li><b>Compare live:</b> Open <b>Tier 1 Egress Proof (:8001)</b> side-by-side to see raw secrets scrubbed before leaving the customer network.</li>
+                    <li>
+                      <b>Compare live:</b> Open{" "}
+                      <a
+                        href={COLLECTOR_URL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 font-semibold text-emerald-300 underline hover:text-emerald-200"
+                      >
+                        Tier 1 Egress Proof (127.0.0.1:8001) <ExternalLink size={12} />
+                      </a>{" "}
+                      side-by-side to see raw secrets scrubbed before leaving the customer network.
+                    </li>
                   </ul>
                 </div>
               </div>
