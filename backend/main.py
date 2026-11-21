@@ -16,8 +16,14 @@ from backend.db import (
     saas_lock,
     verify_token_from_db,
 )
+from backend.extras import load_thresholds, register
 
-ALLOWED_FIELDS = {"payload_id", "tenant_id", "region", "collector_id", "source_hash", "category", "metric", "value", "ts_utc", "source_tz", "severity", "context_code"}
+ALLOWED_FIELD_ORDER = [
+    "payload_id", "tenant_id", "region", "collector_id", "source_hash",
+    "category", "metric", "value", "ts_utc", "source_tz", "severity", "context_code",
+]
+ALLOWED_FIELDS = set(ALLOWED_FIELD_ORDER)
+DUPLICATES_BLOCKED: dict[str, int] = {}
 
 app = FastAPI(title="Tier 2 Central Multi-Tenant AIOps SaaS")
 
@@ -48,7 +54,7 @@ def startup():
             _seed_global()
             _seed_tenants()
     except Exception as _e:
-        print(f'[startup] auto-seed skipped: {_e}')
+        print(f"[startup] auto-seed skipped: {_e}")
 
 
 def authenticate(authorization: str | None) -> tuple[str, str]:
@@ -74,13 +80,15 @@ def ingest_telemetry(
             raise HTTPException(status_code=422, detail="Payload rejected: each item must be a JSON object")
         _bad = set(_it.keys()) ^ ALLOWED_FIELDS
         if _bad:
-            raise HTTPException(status_code=422, detail="Payload rejected by SaaS allow-list; offending fields: " + ", ".join(sorted(_bad)))
+            raise HTTPException(
+                status_code=422,
+                detail="Payload rejected by SaaS allow-list; offending fields: " + ", ".join(sorted(_bad)),
+            )
 
     accepted = 0
     duplicates = 0
 
     for item in items:
-        # Enforce tenant isolation & regional data residency
         if item.get("tenant_id") != tenant_id:
             raise HTTPException(status_code=403, detail="Tenant ID mismatch with auth token")
         if item.get("region") != allowed_region:
@@ -95,6 +103,10 @@ def ingest_telemetry(
         else:
             duplicates += 1
 
+    if duplicates > 0:
+        with saas_lock:
+            DUPLICATES_BLOCKED[tenant_id] = DUPLICATES_BLOCKED.get(tenant_id, 0) + duplicates
+
     return {"status": "ok", "accepted": accepted, "duplicates_ignored": duplicates}
 
 
@@ -107,17 +119,15 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         conn = sqlite3.connect(SAAS_DB)
         conn.row_factory = sqlite3.Row
 
-        # Latest 60 events ordered strictly by EVENT TIME (ts_utc)
         metrics_rows = conn.execute(
             """
             SELECT * FROM telemetry_events
             WHERE tenant_id = ?
-            ORDER BY ts_utc DESC LIMIT 60
+            ORDER BY ts_utc DESC LIMIT 240
             """,
             (tenant_id,),
         ).fetchall()
 
-        # Collector fleet health & 60-second stale detection
         col_rows = conn.execute(
             """
             SELECT collector_id, source_hash, MAX(ts_utc) AS last_seen_utc, COUNT(*) AS event_count
@@ -154,14 +164,19 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         total_events = conn.execute(
             "SELECT COUNT(*) FROM telemetry_events WHERE tenant_id = ?", (tenant_id,)
         ).fetchone()[0]
+
         slo_rows = conn.execute(
             "SELECT ts_utc, ingested_at_utc FROM telemetry_events WHERE tenant_id = ? AND metric != 'collector_heartbeat' ORDER BY id DESC LIMIT 300",
             (tenant_id,),
         ).fetchall()
+
+        _th = load_thresholds(conn, tenant_id)
+        dup_count = DUPLICATES_BLOCKED.get(tenant_id, 0)
         conn.close()
 
-    # Compute 4-state health evaluation (Excellent, Good, Fair, Poor)
     latest_cpu = next((r["value"] for r in metrics_rows if r["metric"] == "cpu_pct"), 25.0)
+    latest_mem = next((r["value"] for r in metrics_rows if r["metric"] == "mem_pct"), None)
+    latest_disk = next((r["value"] for r in metrics_rows if r["metric"] == "disk_pct"), None)
     latest_lat = next((r["value"] for r in metrics_rows if r["metric"] == "latency_ms"), 30.0)
     open_incidents = [dict(r) for r in incidents_rows if r["status"] == "OPEN"]
 
@@ -173,17 +188,15 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         is_stale = age_sec > 60.0
         if is_stale:
             any_stale = True
-        collectors.append(
-            {
-                "collector_id": c["collector_id"],
-                "source_hash": c["source_hash"],
-                "last_seen_utc": c["last_seen_utc"],
-                "seconds_ago": age_sec,
-                "status": "STALE / OFFLINE" if is_stale else "ONLINE",
-                "health": "Poor" if is_stale else "Excellent",
-                "event_count": c["event_count"],
-            }
-        )
+        collectors.append({
+            "collector_id": c["collector_id"],
+            "source_hash": c["source_hash"],
+            "last_seen_utc": c["last_seen_utc"],
+            "seconds_ago": age_sec,
+            "status": "STALE / OFFLINE" if is_stale else "ONLINE",
+            "health": "Poor" if is_stale else "Excellent",
+            "event_count": c["event_count"],
+        })
 
     online_cols = sorted([c for c in collectors if c["status"] == "ONLINE"], key=lambda x: x["seconds_ago"])
     stale_cols = sorted([c for c in collectors if c["status"] != "ONLINE"], key=lambda x: x["seconds_ago"])
@@ -192,12 +205,6 @@ def get_dashboard(authorization: str | None = Header(default=None)):
     total_collectors = len(collectors)
     collectors = (online_cols[:15] + stale_cols[:10]) if (online_cols and stale_cols) else (online_cols + stale_cols)[:25]
 
-    import sqlite3 as _sq
-    from backend.extras import load_thresholds
-    with saas_lock:
-        _tc = _sq.connect(SAAS_DB)
-        _th = load_thresholds(_tc, tenant_id)
-        _tc.close()
     cpu_fair, cpu_poor = _th["cpu_pct"]
     lat_fair, lat_poor = _th["latency_ms"]
     crit_incidents = [i for i in open_incidents if i["severity"] == "critical"]
@@ -232,8 +239,12 @@ def get_dashboard(authorization: str | None = Header(default=None)):
 
     record_health_transition(tenant_id, overall_state, state_reason)
 
-    # Reverse metrics_rows so charts render left-to-right chronologically by event time
     chronological_metrics = [dict(r) for r in reversed(metrics_rows)]
+    latest_payload = (
+        {k: metrics_rows[0][k] for k in ALLOWED_FIELD_ORDER if k in metrics_rows[0].keys()}
+        if metrics_rows
+        else None
+    )
 
     parsed_incidents = []
     raw_alerts_total = 0
@@ -261,20 +272,36 @@ def get_dashboard(authorization: str | None = Header(default=None)):
         else:
             lags.append(lag)
     lags.sort()
+
     def _pct(p):
         return round(lags[max(0, -(-p * len(lags) // 100) - 1)] * 1000) if lags else None
-    slo = {"p50_ms": _pct(50), "p95_ms": _pct(95), "samples": len(lags), "late_excluded": late_excluded, "target_p95_ms": 10000}
-    
+
+    slo = {
+        "p50_ms": _pct(50),
+        "p95_ms": _pct(95),
+        "samples": len(lags),
+        "late_excluded": late_excluded,
+        "target_p95_ms": 10000,
+    }
+
     return {
         "tenant_id": tenant_id,
         "region": region,
         "total_events_stored": total_events,
+        "duplicates_blocked": dup_count,
+        "allow_list_fields": ALLOWED_FIELD_ORDER,
+        "latest_payload": latest_payload,
         "slo": slo,
         "health": {
             "state": overall_state,
             "reason": state_reason,
             "latest_cpu": latest_cpu,
+            "latest_mem": latest_mem,
+            "latest_disk": latest_disk,
             "latest_latency": latest_lat,
+            "online_collectors": online_count,
+            "stale_collectors": stale_count,
+            "total_collectors": total_collectors,
         },
         "noise_reduction": {
             "raw_anomalies": raw_alerts_total,
@@ -332,6 +359,7 @@ def approve_remediation(
 
     return {"status": "approved_and_logged", "incident_id": incident_id}
 
+
 class ReconcileRequest(BaseModel):
     payload_ids: List[str]
 
@@ -346,7 +374,7 @@ def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=
     with saas_lock:
         conn = sqlite3.connect(SAAS_DB)
         for i in range(0, len(ids), 500):
-            chunk = ids[i:i + 500]
+            chunk = ids[i : i + 500]
             marks = ",".join("?" * len(chunk))
             r = conn.execute(
                 f"SELECT COUNT(*), COUNT(DISTINCT payload_id) FROM telemetry_events "
@@ -363,8 +391,9 @@ def reconcile(req: ReconcileRequest, authorization: str | None = Header(default=
         "duplicate_rows": rows_total - found,
     }
 
-from backend.extras import register
+
 register(app, authenticate)
+
 
 @app.get("/")
 def root_health():
